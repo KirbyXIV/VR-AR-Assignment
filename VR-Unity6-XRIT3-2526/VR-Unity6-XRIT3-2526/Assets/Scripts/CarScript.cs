@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -22,6 +23,14 @@ public class CarScript : MonoBehaviour
     private bool atRedLight = false;
     private int currentTrafficLight = -1;
 
+    // Audio variables
+    private AudioSource audioSource;
+    public AudioClip engineSound;
+    public AudioClip honkSound;
+    private bool hasHonked = false;
+    private bool playerInNoiseArea = false;
+    public GameObject noiseAreaChild;
+
     void Start()
     {
         cwps = new List<Transform>();
@@ -30,6 +39,32 @@ public class CarScript : MonoBehaviour
 
         // Find the traffic light controller in the scene
         trafficLightController = FindFirstObjectByType<TrafficLightsController>();
+
+        // Find the noise area child
+        noiseAreaChild = transform.Find("CARNOISEAREA").gameObject;
+        if (noiseAreaChild != null)
+        {
+            CarNoiseArea noiseScript = noiseAreaChild.GetComponent<CarNoiseArea>();
+            if (noiseScript == null)
+            {
+                noiseScript = noiseAreaChild.AddComponent<CarNoiseArea>();
+            }
+            noiseScript.carScript = this;
+        }
+        else
+        {
+            Debug.LogWarning("CARAREANOISE child not found on " + gameObject.name);
+        }
+
+        // Setup audio source
+        audioSource = GetComponent<AudioSource>();
+        if (audioSource == null)
+        {
+            audioSource = gameObject.AddComponent<AudioSource>();
+        }
+        audioSource.clip = engineSound;
+        audioSource.loop = true;
+        audioSource.playOnAwake = false;
 
         SetRoute();
         initialDelay = Random.Range(2.0f, 15.0f);
@@ -42,7 +77,16 @@ public class CarScript : MonoBehaviour
         if (!go)
         {
             initialDelay -= Time.deltaTime;
-            if (initialDelay <= 0.0f) { go = true; SetRoute(); }
+            if (initialDelay <= 0.0f)
+            {
+                go = true;
+                SetRoute();
+
+                if (engineSound != null && !audioSource.isPlaying)
+                {
+                    audioSource.Play();
+                }
+            }
             else return;
         }
         Vector3 displacement = route[targetWP].position - transform.position;
@@ -55,12 +99,27 @@ public class CarScript : MonoBehaviour
         }
 
         // Determine target speed based on obstacles and traffic lights
-        if (atRedLight) targetSpeed = 0f; // Stop at red light
-        else if (obstacleDetected) targetSpeed = obstacleSlowSpeed;
-        else targetSpeed = maxSpeed;
+        if (atRedLight)
+        {
+            targetSpeed = 0f; // Stop at red light
+        }
+        else if (obstacleDetected)
+        {
+            targetSpeed = obstacleSlowSpeed;
+        }
+        else
+        {
+            targetSpeed = maxSpeed;
+        }
 
-        if (currentSpeed < targetSpeed) currentSpeed += acceleration * Time.deltaTime;
-        else if (currentSpeed > targetSpeed) currentSpeed -= deceleration * Time.deltaTime;
+        if (currentSpeed < targetSpeed)
+        {
+            currentSpeed += acceleration * Time.deltaTime;
+        }
+        else if (currentSpeed > targetSpeed)
+        {
+            currentSpeed -= deceleration * Time.deltaTime;
+        }
 
         currentSpeed = Mathf.Clamp(currentSpeed, 0, maxSpeed);
 
@@ -96,11 +155,29 @@ public class CarScript : MonoBehaviour
         targetWP = 1;
     }
 
+    public void SetPlayerInNoiseArea(bool inArea)
+    {
+        playerInNoiseArea = inArea;
+    }
+
     private void OnTriggerEnter(Collider other)
     {
+        if (other.transform.IsChildOf(transform))
+        {
+            return;
+        }
+
         if (other.CompareTag("Player") || other.CompareTag("Pedestrian") || other.CompareTag("Car"))
         {
             obstacleDetected = true;
+
+            // Honk if player is in the way and in noise area
+            if ((other.CompareTag("Player") || other.CompareTag("Pedestrian")) && !hasHonked && honkSound && playerInNoiseArea)
+            {
+                audioSource.PlayOneShot(honkSound);
+                hasHonked = true;
+                StartCoroutine(ResetHonk());
+            }
         }
 
         // Check for traffic light trigger and get which light it is
@@ -139,7 +216,6 @@ public class CarScript : MonoBehaviour
 
     private void OnTriggerStay(Collider other)
     {
-        // Continuously check traffic light state while in trigger zone
         if (other.CompareTag("TrafficLight"))
         {
             CheckTrafficLight();
@@ -148,12 +224,16 @@ public class CarScript : MonoBehaviour
 
     private void OnTriggerExit(Collider other)
     {
+        if (other.transform.IsChildOf(transform))
+        {
+            return;
+        }
+
         if (other.CompareTag("Player") || other.CompareTag("Pedestrian") || other.CompareTag("Car"))
         {
             obstacleDetected = false;
         }
 
-        // Clear red light flag when leaving traffic light zone
         if (other.CompareTag("TrafficLight"))
         {
             atRedLight = false;
@@ -167,8 +247,13 @@ public class CarScript : MonoBehaviour
         {
             int lightState = trafficLightController.GetLightState(currentTrafficLight);
 
-            // If light is red (0), stop; if green (1), go
             atRedLight = (lightState == 0);
         }
+    }
+
+    private IEnumerator ResetHonk()
+    {
+        yield return new WaitForSeconds(3f);
+        hasHonked = false;
     }
 }

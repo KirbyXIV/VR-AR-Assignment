@@ -7,6 +7,9 @@ TagManager:
   - Pedestrian
   - TrafficLight
   - Car
+  - Park
+  - Argument
+  - noiseArea
   layers:
   - Default
   - TransparentFX
