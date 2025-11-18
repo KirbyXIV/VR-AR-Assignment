@@ -18,45 +18,32 @@ public class CarScript : MonoBehaviour
     private float targetSpeed;
     private bool obstacleDetected = false;
 
-    // Traffic light variables
     private TrafficLightsController trafficLightController;
     private bool atRedLight = false;
     private int currentTrafficLight = -1;
 
-    // Audio variables
     private AudioSource audioSource;
     public AudioClip engineSound;
     public AudioClip honkSound;
-    private bool hasHonked = false;
-    private bool playerInNoiseArea = false;
-    public GameObject noiseAreaChild;
+    public float honkCooldown = 3f;
+    public float honkRange = 10f;
+    private float lastHonkTime = -999f;
+    private Transform playerTransform;
 
     void Start()
     {
         cwps = new List<Transform>();
-        for (int i = 1; i <= 12; i++)
+        for (int i = 1; i <= 13; i++)
             cwps.Add(GameObject.Find("CWP (" + i + ")").transform);
 
-        // Find the traffic light controller in the scene
         trafficLightController = FindFirstObjectByType<TrafficLightsController>();
 
-        // Find the noise area child
-        noiseAreaChild = transform.Find("CARNOISEAREA").gameObject;
-        if (noiseAreaChild != null)
+        GameObject player = GameObject.FindGameObjectWithTag("Player");
+        if (player != null)
         {
-            CarNoiseArea noiseScript = noiseAreaChild.GetComponent<CarNoiseArea>();
-            if (noiseScript == null)
-            {
-                noiseScript = noiseAreaChild.AddComponent<CarNoiseArea>();
-            }
-            noiseScript.carScript = this;
-        }
-        else
-        {
-            Debug.LogWarning("CARAREANOISE child not found on " + gameObject.name);
+            playerTransform = player.transform;
         }
 
-        // Setup audio source
         audioSource = GetComponent<AudioSource>();
         if (audioSource == null)
         {
@@ -65,9 +52,13 @@ public class CarScript : MonoBehaviour
         audioSource.clip = engineSound;
         audioSource.loop = true;
         audioSource.playOnAwake = false;
+        audioSource.spatialBlend = 1f;
+        audioSource.minDistance = 5f;
+        audioSource.maxDistance = 50f;
+        audioSource.rolloffMode = AudioRolloffMode.Linear;
 
         SetRoute();
-        initialDelay = Random.Range(2.0f, 15.0f);
+        initialDelay = Random.Range(1.0f, 5f);
         transform.position = new Vector3(0.0f, -5.0f, 0.0f);
         targetSpeed = maxSpeed;
     }
@@ -98,10 +89,9 @@ public class CarScript : MonoBehaviour
             if (targetWP >= route.Count) { SetRoute(); return; }
         }
 
-        // Determine target speed based on obstacles and traffic lights
         if (atRedLight)
         {
-            targetSpeed = 0f; // Stop at red light
+            targetSpeed = 0f;
         }
         else if (obstacleDetected)
         {
@@ -131,15 +121,19 @@ public class CarScript : MonoBehaviour
             Vector3 desiredForward = Vector3.RotateTowards(transform.forward, velocity, 10.0f * Time.deltaTime, 0f);
             rb.MoveRotation(Quaternion.LookRotation(desiredForward));
         }
+
+        if (audioSource.isPlaying && engineSound != null)
+        {
+            audioSource.pitch = Mathf.Lerp(0.8f, 1.5f, currentSpeed / maxSpeed);
+        }
     }
 
     void SetRoute()
     {
-        routeNumber = Random.Range(0, 4);
         switch (routeNumber)
         {
             case 0:
-                route = new List<Transform> { cwps[0], cwps[1] };
+                route = new List<Transform> { cwps[12], cwps[9], cwps[4] };
                 break;
             case 1:
                 route = new List<Transform> { cwps[2], cwps[3] };
@@ -153,11 +147,40 @@ public class CarScript : MonoBehaviour
         }
         transform.position = new Vector3(route[0].position.x, 0.55f, route[0].position.z);
         targetWP = 1;
+
+        if (routeNumber >= 4)
+        {
+            routeNumber = 0;
+        }
+        else
+        {
+            routeNumber++;
+        }
     }
 
-    public void SetPlayerInNoiseArea(bool inArea)
+    private bool IsPlayerNearby()
     {
-        playerInNoiseArea = inArea;
+        if (playerTransform == null)
+            return false;
+
+        float distance = Vector3.Distance(transform.position, playerTransform.position);
+        return distance <= honkRange;
+    }
+
+    private void TryHonk()
+    {
+        if (Time.time - lastHonkTime >= honkCooldown && honkSound != null && IsPlayerNearby())
+        {
+            audioSource.PlayOneShot(honkSound);
+            lastHonkTime = Time.time;
+        }
+    }
+
+    private bool IsInFront(Vector3 objectPosition)
+    {
+        Vector3 toObject = objectPosition - transform.position;
+        float dot = Vector3.Dot(transform.forward, toObject.normalized);
+        return dot > 0.5f;
     }
 
     private void OnTriggerEnter(Collider other)
@@ -169,21 +192,19 @@ public class CarScript : MonoBehaviour
 
         if (other.CompareTag("Player") || other.CompareTag("Pedestrian") || other.CompareTag("Car"))
         {
-            obstacleDetected = true;
-
-            // Honk if player is in the way and in noise area
-            if ((other.CompareTag("Player") || other.CompareTag("Pedestrian")) && !hasHonked && honkSound && playerInNoiseArea)
+            if (IsInFront(other.transform.position))
             {
-                audioSource.PlayOneShot(honkSound);
-                hasHonked = true;
-                StartCoroutine(ResetHonk());
+                obstacleDetected = true;
+
+                if (other.CompareTag("Player") || other.CompareTag("Pedestrian"))
+                {
+                    TryHonk();
+                }
             }
         }
 
-        // Check for traffic light trigger and get which light it is
         if (other.CompareTag("TrafficLight"))
         {
-            // Search up the hierarchy to find which TL this belongs to
             Transform current = other.transform;
             while (current != null)
             {
@@ -249,11 +270,5 @@ public class CarScript : MonoBehaviour
 
             atRedLight = (lightState == 0);
         }
-    }
-
-    private IEnumerator ResetHonk()
-    {
-        yield return new WaitForSeconds(3f);
-        hasHonked = false;
     }
 }
